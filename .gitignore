@@ -1,2 +1,6 @@
 fire_yolov8.pt
-*.pt
+*.pt*.weights
+*.cfg
+.rpi_mode
+venv/
+__pycache__/

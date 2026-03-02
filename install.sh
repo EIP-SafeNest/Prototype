@@ -37,6 +37,10 @@ source venv/bin/activate
 # Install Python packages
 echo -e "${YELLOW}[STEP 3/6]${NC} Installation des packages Python..."
 pip install --upgrade pip
+
+# Install PyTorch CPU-only (much smaller)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 pip install flask flask-socketio opencv-python-headless ultralytics twilio numpy huggingface_hub
 
 # Download YOLO fire model
@@ -57,10 +61,10 @@ import os
 
 token = os.environ.get('HF_TOKEN')
 
-print('Téléchargement du modèle YOLO11-X fire detection...')
+print('Téléchargement du modèle YOLO11-S fire detection (version légère)...')
 model_path = hf_hub_download(
     repo_id='leeyunjai/yolo11-firedetect',
-    filename='firedetect-11x.pt',
+    filename='firedetect-11s.pt',
     token=token
 )
 shutil.copy(model_path, 'fire_yolov8.pt')

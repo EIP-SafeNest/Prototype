@@ -309,9 +309,14 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label>🔍 FPS Analyse IA: <span id="fps-value">3</span></label>
-                            <input type="range" id="analysis-fps" min="1" max="10" value="3">
-                            <small style="color: #666; font-size: 0.8em;">Vidéo = max caméra, Analyse = ce slider</small>
+                            <label>🔍 FPS Analyse: <span id="fps-value">10</span></label>
+                            <input type="range" id="analysis-fps" min="1" max="30" value="10">
+                            <small style="color: #666; font-size: 0.8em;">Traitement local ultra-rapide!</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🎯 Sensibilité feu: <span id="sensitivity-value">50</span>%</label>
+                            <input type="range" id="fire-sensitivity" min="0" max="100" value="50">
+                            <small style="color: #666; font-size: 0.8em;">Augmenter pour détecter plus facilement</small>
                         </div>
                         <button class="btn-config" onclick="saveConfig()">💾 Sauvegarder</button>
                     </div>
@@ -361,15 +366,19 @@
         const socket = io();
         let isRunning = false;
         
-        // FPS slider
+        // Sliders
         document.getElementById('analysis-fps').addEventListener('input', function() {
             document.getElementById('fps-value').textContent = this.value;
+        });
+        document.getElementById('fire-sensitivity').addEventListener('input', function() {
+            document.getElementById('sensitivity-value').textContent = this.value;
         });
         
         async function saveConfig() {
             const videoUrl = document.getElementById('video-url').value;
             const cameraIndex = document.getElementById('camera-index').value;
             const analysisFps = document.getElementById('analysis-fps').value;
+            const fireSensitivity = document.getElementById('fire-sensitivity').value;
             
             const response = await fetch('/config', {
                 method: 'POST',
@@ -377,7 +386,8 @@
                 body: JSON.stringify({
                     video_url: videoUrl,
                     camera_index: parseInt(cameraIndex),
-                    analysis_fps: parseInt(analysisFps)
+                    analysis_fps: parseInt(analysisFps),
+                    fire_sensitivity: parseInt(fireSensitivity)
                 })
             });
             
@@ -393,6 +403,8 @@
             document.getElementById('camera-index').value = data.camera_index;
             document.getElementById('analysis-fps').value = data.analysis_fps;
             document.getElementById('fps-value').textContent = data.analysis_fps;
+            document.getElementById('fire-sensitivity').value = data.fire_sensitivity || 50;
+            document.getElementById('sensitivity-value').textContent = data.fire_sensitivity || 50;
         }
         
         // Socket events

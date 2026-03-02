@@ -38,8 +38,18 @@ source venv/bin/activate
 echo -e "${YELLOW}[STEP 3/6]${NC} Installation des packages Python..."
 pip install --upgrade pip
 
-# Install PyTorch CPU-only (much smaller)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Detect architecture
+ARCH=$(uname -m)
+echo -e "${GREEN}[INFO]${NC} Architecture détectée: $ARCH"
+
+if [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "armv7l" ]]; then
+    # Raspberry Pi ARM - use piwheels or specific torch version
+    echo -e "${YELLOW}[INFO]${NC} Installation PyTorch pour ARM (Raspberry Pi)..."
+    pip install torch torchvision --extra-index-url https://torch.kmtea.eu/whl/stable.html
+else
+    # x86/x64 - standard PyTorch
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+fi
 
 pip install flask flask-socketio opencv-python-headless ultralytics twilio numpy huggingface_hub
 

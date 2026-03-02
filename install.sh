@@ -22,7 +22,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     # Install system dependencies
     echo -e "${YELLOW}[STEP 1/6]${NC} Installation des dépendances système..."
     sudo apt update
-    sudo apt install -y python3-pip python3-venv libgl1-mesa-glx libglib2.0-0 git
+    sudo apt install -y python3-pip python3-venv libglib2.0-0 git
+    # Try to install OpenGL libs (may vary by distro)
+    sudo apt install -y libgl1 || sudo apt install -y libgl1-mesa-dev || echo "OpenGL libs skipped"
 else
     echo -e "${GREEN}[INFO]${NC} Système non-Linux détecté (macOS?)"
 fi

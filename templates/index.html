@@ -380,7 +380,7 @@
             const analysisFps = document.getElementById('analysis-fps').value;
             const fireSensitivity = document.getElementById('fire-sensitivity').value;
             
-            const response = await fetch('/config', {
+            const response = await fetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -397,7 +397,7 @@
         }
         
         async function loadConfig() {
-            const response = await fetch('/config');
+            const response = await fetch('/api/config');
             const data = await response.json();
             document.getElementById('video-url').value = data.video_url || '';
             document.getElementById('camera-index').value = data.camera_index;
@@ -443,19 +443,16 @@
                                status === 'detecting' ? '✅ ACTIF' : 'ARRÊTÉ';
         }
         
-        async function startDetection() {
-            const response = await fetch('/start', { method: 'POST' });
-            const data = await response.json();
-            if (data.status === 'started') {
-                isRunning = true;
-                updateBadge('live');
-                addLog('▶️ Détection démarrée');
-                startStatusPolling();
-            }
+        function startDetection() {
+            socket.emit('start_detection');
+            isRunning = true;
+            updateBadge('live');
+            addLog('▶️ Détection démarrée');
+            startStatusPolling();
         }
         
-        async function stopDetection() {
-            const response = await fetch('/stop', { method: 'POST' });
+        function stopDetection() {
+            socket.emit('stop_detection');
             isRunning = false;
             updateBadge('stopped');
             addLog('⏹️ Détection arrêtée');
@@ -465,7 +462,7 @@
             const poll = async () => {
                 if (!isRunning) return;
                 
-                const response = await fetch('/status');
+                const response = await fetch('/api/stats');
                 const data = await response.json();
                 
                 document.getElementById('frame-count').textContent = data.frame_count;
@@ -482,7 +479,7 @@
         }
         
         // Check initial status
-        fetch('/status').then(r => r.json()).then(data => {
+        fetch('/api/stats').then(r => r.json()).then(data => {
             if (data.running) {
                 isRunning = true;
                 updateBadge('live');

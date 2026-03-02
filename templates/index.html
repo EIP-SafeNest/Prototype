@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>� Fire Detection System</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: white;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            text-shadow: 0 0 20px rgba(0, 150, 255, 0.5);
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 30px;
+        }
+        
+        @media (max-width: 900px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .video-container {
+            background: #0f0f23;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+        
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        #video-feed {
+            width: 100%;
+            display: block;
+            border-radius: 10px;
+        }
+        
+        .video-overlay {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .badge {
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        
+        .badge.live {
+            background: #ff4444;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .badge.detecting {
+            background: #00c853;
+        }
+        
+        .badge.stopped {
+            background: #666;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .panel h2 {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #00d4ff;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 15px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn-start {
+            background: linear-gradient(135deg, #00c853, #00e676);
+            color: white;
+        }
+        
+        .btn-start:hover {
+            box-shadow: 0 5px 20px rgba(0, 200, 83, 0.4);
+        }
+        
+        .btn-stop {
+            background: linear-gradient(135deg, #ff5252, #ff1744);
+            color: white;
+        }
+        
+        .btn-stop:hover {
+            box-shadow: 0 5px 20px rgba(255, 82, 82, 0.4);
+        }
+        
+        .btn-config {
+            width: 100%;
+            background: linear-gradient(135deg, #7c4dff, #651fff);
+            color: white;
+            margin-top: 10px;
+        }
+        
+        .btn-config:hover {
+            box-shadow: 0 5px 20px rgba(124, 77, 255, 0.4);
+        }
+        
+        .config-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .form-group label {
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        
+        .form-group input[type="text"],
+        .form-group select {
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: white;
+            font-size: 0.95em;
+        }
+        
+        .form-group input[type="text"]::placeholder {
+            color: #666;
+        }
+        
+        .form-group input[type="range"] {
+            width: 100%;
+            accent-color: #00d4ff;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .stat {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        
+        .stat-label {
+            font-size: 0.85em;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        .detection-alert {
+            display: none;
+            background: linear-gradient(135deg, #ff4444, #ff1744);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            animation: alert-pulse 0.5s infinite;
+        }
+        
+        .detection-alert.show {
+            display: block;
+        }
+        
+        @keyframes alert-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+        
+        .detection-alert h3 {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+        
+        .log-container {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 10px;
+        }
+        
+        .log-entry {
+            padding: 8px 10px;
+            margin-bottom: 5px;
+            border-radius: 5px;
+            font-size: 0.85em;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .log-entry.detection {
+            background: rgba(255, 0, 0, 0.2);
+            border-left: 3px solid #ff4444;
+        }
+        
+        .log-entry .time {
+            color: #666;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 Fire Detection System</h1>
+        
+        <div class="main-content">
+            <div class="video-container">
+                <div class="video-wrapper">
+                    <img id="video-feed" src="/video_feed" alt="Video Feed">
+                    <div class="video-overlay">
+                        <span id="status-badge" class="badge stopped">ARRÊTÉ</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sidebar">
+                <div class="panel">
+                    <h2>⚙️ Configuration</h2>
+                    <div class="config-form">
+                        <div class="form-group">
+                            <label>📹 URL Caméra IP (avec /video)</label>
+                            <input type="text" id="video-url" placeholder="http://192.168.1.100:8081/video">
+                            <small style="color: #666; font-size: 0.8em;">Laisser vide pour webcam</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🎥 Index Webcam (si pas d'URL)</label>
+                            <select id="camera-index">
+                                <option value="0" selected>0 - Caméra par défaut</option>
+                                <option value="1">1 - Caméra secondaire</option>
+                                <option value="2">2 - Autre caméra</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>🔍 FPS Analyse IA: <span id="fps-value">3</span></label>
+                            <input type="range" id="analysis-fps" min="1" max="10" value="3">
+                            <small style="color: #666; font-size: 0.8em;">Vidéo = max caméra, Analyse = ce slider</small>
+                        </div>
+                        <button class="btn-config" onclick="saveConfig()">💾 Sauvegarder</button>
+                    </div>
+                </div>
+                
+                <div class="panel">
+                    <h2>🎮 Contrôles</h2>
+                    <div class="controls">
+                        <button class="btn-start" onclick="startDetection()">▶️ Démarrer</button>
+                        <button class="btn-stop" onclick="stopDetection()">⏹️ Arrêter</button>
+                    </div>
+                </div>
+                
+                <div id="alert-panel" class="detection-alert">
+                    <h3>� FEU DÉTECTÉ!</h3>
+                    <p>Notification WhatsApp envoyée</p>
+                </div>
+                
+                <div class="panel">
+                    <h2>📊 Statistiques</h2>
+                    <div class="stats">
+                        <div class="stat">
+                            <div id="frame-count" class="stat-value">0</div>
+                            <div class="stat-label">Frames analysées</div>
+                        </div>
+                        <div class="stat">
+                            <div id="detection-count" class="stat-value">0</div>
+                            <div class="stat-label">Détections</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="panel">
+                    <h2>📋 Journal</h2>
+                    <div id="log-container" class="log-container">
+                        <div class="log-entry">
+                            <span class="time">--:--:--</span>
+                            Système prêt
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const socket = io();
+        let isRunning = false;
+        
+        // FPS slider
+        document.getElementById('analysis-fps').addEventListener('input', function() {
+            document.getElementById('fps-value').textContent = this.value;
+        });
+        
+        async function saveConfig() {
+            const videoUrl = document.getElementById('video-url').value;
+            const cameraIndex = document.getElementById('camera-index').value;
+            const analysisFps = document.getElementById('analysis-fps').value;
+            
+            const response = await fetch('/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_url: videoUrl,
+                    camera_index: parseInt(cameraIndex),
+                    analysis_fps: parseInt(analysisFps)
+                })
+            });
+            
+            if (response.ok) {
+                addLog('⚙️ Configuration sauvegardée');
+            }
+        }
+        
+        async function loadConfig() {
+            const response = await fetch('/config');
+            const data = await response.json();
+            document.getElementById('video-url').value = data.video_url || '';
+            document.getElementById('camera-index').value = data.camera_index;
+            document.getElementById('analysis-fps').value = data.analysis_fps;
+            document.getElementById('fps-value').textContent = data.analysis_fps;
+        }
+        
+        // Socket events
+        socket.on('detection', function(data) {
+            if (data.detected) {
+                showAlert();
+                addLog(`🔥 Feu détecté! (Total: ${data.count})`, true);
+                document.getElementById('detection-count').textContent = data.count;
+            }
+        });
+        
+        function showAlert() {
+            const alert = document.getElementById('alert-panel');
+            alert.classList.add('show');
+            setTimeout(() => alert.classList.remove('show'), 3000);
+        }
+        
+        function addLog(message, isDetection = false) {
+            const container = document.getElementById('log-container');
+            const time = new Date().toLocaleTimeString('fr-FR');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry' + (isDetection ? ' detection' : '');
+            entry.innerHTML = `<span class="time">${time}</span>${message}`;
+            container.insertBefore(entry, container.firstChild);
+            
+            // Keep only last 20 entries
+            while (container.children.length > 20) {
+                container.removeChild(container.lastChild);
+            }
+        }
+        
+        function updateBadge(status) {
+            const badge = document.getElementById('status-badge');
+            badge.className = 'badge ' + status;
+            badge.textContent = status === 'live' ? '🔴 LIVE' : 
+                               status === 'detecting' ? '✅ ACTIF' : 'ARRÊTÉ';
+        }
+        
+        async function startDetection() {
+            const response = await fetch('/start', { method: 'POST' });
+            const data = await response.json();
+            if (data.status === 'started') {
+                isRunning = true;
+                updateBadge('live');
+                addLog('▶️ Détection démarrée');
+                startStatusPolling();
+            }
+        }
+        
+        async function stopDetection() {
+            const response = await fetch('/stop', { method: 'POST' });
+            isRunning = false;
+            updateBadge('stopped');
+            addLog('⏹️ Détection arrêtée');
+        }
+        
+        function startStatusPolling() {
+            const poll = async () => {
+                if (!isRunning) return;
+                
+                const response = await fetch('/status');
+                const data = await response.json();
+                
+                document.getElementById('frame-count').textContent = data.frame_count;
+                document.getElementById('detection-count').textContent = data.detection_count;
+                
+                if (data.running) {
+                    setTimeout(poll, 1000);
+                } else {
+                    isRunning = false;
+                    updateBadge('stopped');
+                }
+            };
+            poll();
+        }
+        
+        // Check initial status
+        fetch('/status').then(r => r.json()).then(data => {
+            if (data.running) {
+                isRunning = true;
+                updateBadge('live');
+                startStatusPolling();
+            }
+        });
+        
+        // Load config on start
+        loadConfig();
+    </script>
+</body>
+</html>

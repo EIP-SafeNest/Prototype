@@ -14,4 +14,4 @@ echo "=============================================="
 echo "Interface: http://localhost:5001"
 echo "=============================================="
 
-python web_app.py
+python3 web_app.py

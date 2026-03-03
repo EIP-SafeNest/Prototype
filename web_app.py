@@ -294,46 +294,8 @@ def video_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
-@app.route('/start', methods=['POST'])
-def start_detection():
-    if not state.running:
-        state.running = True
-        state.frame_count = 0
-        state.detection_count = 0
-        state.fire_detected = False
-        thread = threading.Thread(target=detection_loop)
-        thread.daemon = True
-        thread.start()
-        return jsonify({'status': 'started'})
-    return jsonify({'status': 'already_running'})
-
-
-@app.route('/stop', methods=['POST'])
-def stop_detection():
-    state.running = False
-    state.current_frame = None
-    return jsonify({'status': 'stopped'})
-
-
-@app.route('/status')
-def get_status():
-    return jsonify({
-        'running': state.running,
-        'status': state.status,
-        'frame_count': state.frame_count,
-        'detection_count': state.detection_count,
-        'fire_detected': state.fire_detected,
-        'config': {
-            'video_url': config.video_url,
-            'camera_index': config.camera_index,
-            'analysis_fps': config.analysis_fps,
-            'fire_sensitivity': config.fire_sensitivity
-        }
-    })
-
-
-@app.route('/config', methods=['GET', 'POST'])
-def handle_config():
+@app.route('/api/config', methods=['GET', 'POST'])
+def api_config():
     if request.method == 'POST':
         data = request.json
         if 'video_url' in data:
@@ -344,12 +306,8 @@ def handle_config():
             config.analysis_fps = max(1, min(30, int(data['analysis_fps'])))
         if 'fire_sensitivity' in data:
             config.fire_sensitivity = max(0, min(100, int(data['fire_sensitivity'])))
-        return jsonify({'status': 'updated', 'config': {
-            'video_url': config.video_url,
-            'camera_index': config.camera_index,
-            'analysis_fps': config.analysis_fps,
-            'fire_sensitivity': config.fire_sensitivity
-        }})
+        return jsonify({'success': True})
+    
     return jsonify({
         'video_url': config.video_url,
         'camera_index': config.camera_index,
@@ -358,10 +316,60 @@ def handle_config():
     })
 
 
+@app.route('/api/stats')
+def api_stats():
+    return jsonify({
+        'frame_count': state.frame_count,
+        'detection_count': state.detection_count,
+        'fire_detected': state.fire_detected,
+        'status': state.status,
+        'running': state.running
+    })
+
+
+# SocketIO events
+@socketio.on('connect')
+def on_connect():
+    emit('status_update', {'status': state.status, 'running': state.running})
+
+
+@socketio.on('start_detection')
+def on_start():
+    if not state.running:
+        state.running = True
+        state.frame_count = 0
+        state.detection_count = 0
+        state.fire_detected = False
+        thread = threading.Thread(target=detection_loop)
+        thread.daemon = True
+        thread.start()
+        emit('status_update', {'status': 'Démarrage...', 'running': True})
+
+
+@socketio.on('stop_detection')
+def on_stop():
+    state.running = False
+    state.current_frame = None
+    emit('status_update', {'status': 'Arrêté', 'running': False})
+
+
+@socketio.on('test_notification')
+def on_test():
+    try:
+        message = twilio_client.messages.create(
+            body=f"🧪 TEST: Système actif - {datetime.now().strftime('%H:%M:%S')}",
+            from_=TWILIO_WHATSAPP_NUMBER,
+            to=DESTINATION_WHATSAPP
+        )
+        emit('notification_result', {'success': True, 'sid': message.sid})
+    except Exception as e:
+        emit('notification_result', {'success': False, 'error': str(e)})
+
+
 if __name__ == '__main__':
     print("=" * 60)
     print("🔥  Fire Detection Web Interface (Local YOLO)")
     print("=" * 60)
     print("Ouvrez http://localhost:5001 dans votre navigateur")
     print("=" * 60)
-    socketio.run(app, host='0.0.0.0', port=5001, debug=False)
+    socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)

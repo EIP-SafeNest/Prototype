@@ -65,7 +65,9 @@ import shutil
 import os
 
 token = os.environ.get('HF_TOKEN')
-print('Téléchargement du modèle YOLO11-S fire detection...')
+# Options: firedetect-11n.pt (nano/rapide), firedetect-11s.pt (small/équilibré), 
+#          firedetect-11m.pt (medium), firedetect-11x.pt (extra-large/précis mais lent)
+print('Téléchargement du modèle YOLO11-S fire detection (équilibré vitesse/précision)...')
 model_path = hf_hub_download(
     repo_id='leeyunjai/yolo11-firedetect',
     filename='firedetect-11s.pt',

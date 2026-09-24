@@ -690,6 +690,19 @@ def video_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+@app.route('/api/cameras')
+def api_cameras():
+    """Scanne les caméras locales et réseau (Tailscale + réseau local)."""
+    try:
+        from camera_scanner import scan_cameras
+        cameras = scan_cameras()
+    except Exception as e:
+        return jsonify({'cameras': [], 'error': str(e)}), 500
+    return jsonify({
+        'cameras': cameras,
+        'current': {'video_url': config.video_url or '', 'camera_index': config.camera_index},
+    })
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
     if request.method == 'POST':

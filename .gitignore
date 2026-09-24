@@ -4,3 +4,4 @@ fire_yolov8.pt
 .rpi_mode
 venv/
 __pycache__/
+.venv-camera/

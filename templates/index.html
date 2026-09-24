@@ -195,6 +195,31 @@
             text-align: right;
         }
 
+        .cam-row { display: flex; gap: 8px; }
+        .cam-row select { flex: 1; min-width: 0; }
+        .scan-btn {
+            flex: none;
+            width: 40px;
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,.25);
+            color: var(--text);
+            font-size: 1rem;
+            cursor: pointer;
+            transition: border-color .2s;
+        }
+        .scan-btn:hover { border-color: var(--teal); }
+        .scan-btn:disabled { opacity: .5; cursor: wait; }
+        .scan-btn.spinning span { display: inline-block; animation: scan-spin 1s linear infinite; }
+        @keyframes scan-spin { to { transform: rotate(360deg); } }
+        .manual-src { margin-bottom: 14px; }
+        .manual-src summary {
+            font-size: .78rem;
+            color: var(--muted);
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+
         .checkbox-row {
             display: flex;
             align-items: center;
@@ -488,19 +513,33 @@
                     <h3>⚙️ Paramètres</h3>
 
                     <div class="field">
-                        <label>📹 URL Caméra IP</label>
-                        <input type="text" id="video-url" placeholder="http://192.168.1.100:8081/video">
-                        <small>Laisser vide pour utiliser la webcam</small>
+                        <label>📹 Source vidéo</label>
+                        <div class="cam-row">
+                            <select id="camera-source">
+                                <option value="">— Cliquer sur 🔄 pour scanner —</option>
+                            </select>
+                            <button type="button" class="scan-btn" id="scan-btn" onclick="scanCameras()" title="Scanner les caméras"><span>🔄</span></button>
+                        </div>
+                        <small id="scan-status">Webcams USB, et Mac / téléphones sur le réseau ou Tailscale</small>
                     </div>
 
-                    <div class="field">
-                        <label>🎥 Index Webcam</label>
-                        <select id="camera-index">
-                            <option value="0" selected>0 — Caméra par défaut</option>
-                            <option value="1">1 — Caméra secondaire</option>
-                            <option value="2">2 — Autre caméra</option>
-                        </select>
-                    </div>
+                    <details class="manual-src">
+                        <summary>Réglage manuel</summary>
+                        <div class="field">
+                            <label>📹 URL Caméra IP</label>
+                            <input type="text" id="video-url" placeholder="http://192.168.1.100:8081/video">
+                            <small>Laisser vide pour utiliser la webcam</small>
+                        </div>
+
+                        <div class="field">
+                            <label>🎥 Index Webcam</label>
+                            <select id="camera-index">
+                                <option value="0" selected>0 — Caméra par défaut</option>
+                                <option value="1">1 — Caméra secondaire</option>
+                                <option value="2">2 — Autre caméra</option>
+                            </select>
+                        </div>
+                    </details>
 
                     <div class="field">
                         <div class="range-row">
@@ -611,6 +650,7 @@
         gearBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             dropdown.classList.toggle('open');
+            if (dropdown.classList.contains('open') && !camerasScanned) scanCameras();
         });
         document.addEventListener('click', (e) => {
             if (!dropdown.contains(e.target) && e.target !== gearBtn) {
@@ -651,6 +691,89 @@
             document.getElementById('gamma-value').textContent = this.value;
         });
 
+        /* ── Camera scan ──────────────────────────── */
+        let scannedCameras = [];
+        let camerasScanned = false;
+
+        function escapeHtml(t) {
+            const d = document.createElement('div');
+            d.textContent = t;
+            return d.innerHTML;
+        }
+
+        function setCameraIndex(idx) {
+            const sel = document.getElementById('camera-index');
+            if (![...sel.options].some(o => o.value === String(idx))) {
+                const o = document.createElement('option');
+                o.value = idx;
+                o.textContent = idx + ' — /dev/video' + idx;
+                sel.appendChild(o);
+            }
+            sel.value = String(idx);
+        }
+
+        async function scanCameras() {
+            const btn    = document.getElementById('scan-btn');
+            const status = document.getElementById('scan-status');
+            const sel    = document.getElementById('camera-source');
+            camerasScanned = true;
+            btn.disabled = true;
+            btn.classList.add('spinning');
+            status.textContent = 'Scan en cours… (quelques secondes)';
+            try {
+                const r = await fetch('/api/cameras');
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+                scannedCameras = d.cameras || [];
+                const cur = d.current || {};
+                sel.innerHTML = '';
+
+                if (!scannedCameras.length) {
+                    sel.innerHTML = '<option value="">Aucune caméra trouvée</option>';
+                    status.textContent = 'Rien trouvé : lance mac_camera_stream.py sur le Mac ou une appli caméra sur le téléphone, puis rescanne.';
+                    return;
+                }
+
+                let matched = false;
+                scannedCameras.forEach((c, i) => {
+                    const o = document.createElement('option');
+                    o.value = i;
+                    o.textContent = (c.type === 'local' ? '🎥 ' : '📡 ') + c.label;
+                    const isCurrent = c.video_url
+                        ? c.video_url === cur.video_url
+                        : (!cur.video_url && c.camera_index === cur.camera_index);
+                    if (isCurrent && !matched) { o.selected = true; matched = true; }
+                    sel.appendChild(o);
+                });
+                if (!matched) {
+                    const o = document.createElement('option');
+                    o.value = '';
+                    o.textContent = '— Choisir une caméra —';
+                    o.selected = true;
+                    sel.insertBefore(o, sel.firstChild);
+                }
+                status.textContent = scannedCameras.length + ' caméra(s) trouvée(s)';
+            } catch (e) {
+                status.textContent = 'Erreur de scan : ' + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('spinning');
+            }
+        }
+
+        document.getElementById('camera-source').addEventListener('change', async function() {
+            const c = scannedCameras[this.value];
+            if (!c) return;
+            document.getElementById('video-url').value = c.video_url || '';
+            if (c.camera_index !== null && c.camera_index !== undefined) setCameraIndex(c.camera_index);
+            await saveConfig();
+            addLog('📹 Source : ' + escapeHtml(c.label));
+            if (isRunning) {
+                stopDetection();
+                setTimeout(startDetection, 1500);
+            }
+        });
+
         /* ── Config save / load ───────────────────── */
         async function saveConfig() {
             const response = await fetch('/api/config', {
@@ -676,7 +799,7 @@
             const response = await fetch('/api/config');
             const d = await response.json();
             document.getElementById('video-url').value              = d.video_url || '';
-            document.getElementById('camera-index').value           = d.camera_index;
+            setCameraIndex(d.camera_index || 0);
             document.getElementById('analysis-fps').value           = d.analysis_fps;
             document.getElementById('fps-value').textContent        = d.analysis_fps;
             document.getElementById('fire-sensitivity').value       = d.fire_sensitivity || 70;

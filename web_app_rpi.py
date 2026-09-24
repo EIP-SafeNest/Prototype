@@ -57,6 +57,7 @@ class DetectionState:
         self.output_layers = None
         self.classes = ["fire", "smoke"]
         self.use_yolo = False
+        self.run_id = 0
         
 state = DetectionState()
 twilio_client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
@@ -230,6 +231,26 @@ def draw_detection_box(frame, detected, bbox=None, label="FEU"):
     return frame
 
 
+STREAM_TIMEOUT_S = 5
+
+
+def open_capture():
+    """Ouvre la source vidéo configurée (URL réseau ou webcam locale)."""
+    video_source = config.video_url.strip() if config.video_url else None
+    if video_source:
+        print(f"[VIDEO] {video_source}")
+        try:
+            # Délais max pour ne jamais rester bloqué sur un flux réseau
+            return cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
+                cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000,
+            ])
+        except Exception:
+            return cv2.VideoCapture(video_source)
+    print(f"[VIDEO] Webcam {config.camera_index}")
+    return cv2.VideoCapture(config.camera_index)
+
+
 def detection_loop():
     """Main detection loop."""
     # Load YOLO
@@ -241,31 +262,47 @@ def detection_loop():
     state.status = f"Actif ({mode})"
     socketio.emit('status_update', {'status': state.status, 'running': True})
     
-    # Open video
-    video_source = config.video_url.strip() if config.video_url else None
-    
-    if video_source:
-        print(f"[VIDEO] {video_source}")
-        state.cap = cv2.VideoCapture(video_source)
-    else:
-        print(f"[VIDEO] Webcam {config.camera_index}")
-        state.cap = cv2.VideoCapture(config.camera_index)
-    
-    if not state.cap.isOpened():
-        state.status = "Erreur vidéo"
-        socketio.emit('status_update', {'status': state.status, 'running': False})
-        state.running = False
+    # Chaque démarrage a son propre identifiant : une ancienne boucle encore
+    # bloquée sur une lecture s'arrête d'elle-même au lieu de partager la caméra.
+    my_run = state.run_id
+
+    def still_mine():
+        return state.running and state.run_id == my_run
+
+    cap = open_capture()
+    if cap is None or not cap.isOpened():
+        if state.run_id == my_run:
+            state.status = "Erreur vidéo"
+            socketio.emit('status_update', {'status': state.status, 'running': False})
+            state.running = False
         return
-    
+    state.cap = cap
+
     analysis_interval = 1.0 / config.analysis_fps
     last_analysis_time = 0
     last_label = "fire"
-    
-    while state.running:
-        ret, frame = state.cap.read()
+    last_frame_time = time.time()
+
+    while still_mine():
+        ret, frame = cap.read()
+        if not still_mine():
+            break
         if not ret:
-            time.sleep(0.1)
+            # Flux coupé ou figé : on se reconnecte
+            if time.time() - last_frame_time > STREAM_TIMEOUT_S:
+                print("[VIDEO] Plus d'image, reconnexion...")
+                cap.release()
+                time.sleep(1)
+                cap = open_capture()
+                if cap is None:
+                    time.sleep(2)
+                    cap = cv2.VideoCapture()
+                state.cap = cap
+                last_frame_time = time.time()
+            else:
+                time.sleep(0.1)
             continue
+        last_frame_time = time.time()
         
         state.frame_count += 1
         current_time = time.time()
@@ -301,10 +338,10 @@ def detection_loop():
         state.current_frame = display_frame
         time.sleep(0.01)
     
-    if state.cap:
-        state.cap.release()
-    state.status = "Arrêté"
-    socketio.emit('status_update', {'status': state.status, 'running': False})
+    cap.release()
+    if state.run_id == my_run:
+        state.status = "Arrêté"
+        socketio.emit('status_update', {'status': state.status, 'running': False})
 
 
 def generate_frames():
@@ -388,6 +425,7 @@ def on_connect():
 def on_start():
     if not state.running:
         state.running = True
+        state.run_id += 1
         state.frame_count = 0
         state.detection_count = 0
         threading.Thread(target=detection_loop, daemon=True).start()

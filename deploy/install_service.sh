@@ -24,7 +24,12 @@ fi
 
 echo "==> Paquets système (ffmpeg, avahi)"
 "${SUDO[@]}" apt-get update -qq
-"${SUDO[@]}" apt-get install -y -qq ffmpeg avahi-daemon
+"${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg avahi-daemon
+# safenest-slim.sh masque avahi par défaut (sauf --keep-avahi) : on le réactive pour safenest.local
+if systemctl is-enabled avahi-daemon.service 2>/dev/null | grep -q masked; then
+    echo "    avahi était masqué (safenest-slim.sh) : réactivation pour l'adresse .local"
+    "${SUDO[@]}" systemctl unmask avahi-daemon.service avahi-daemon.socket
+fi
 "${SUDO[@]}" systemctl enable --now avahi-daemon
 
 echo "==> Configuration ($CONFIG_DIR/env)"

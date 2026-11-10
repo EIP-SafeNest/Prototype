@@ -1,5 +1,6 @@
 fire_yolov8.pt
-*.pt*.weights
+*.pt
+*.weights
 *.cfg
 .rpi_mode
 venv/

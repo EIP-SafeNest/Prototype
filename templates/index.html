@@ -1021,7 +1021,8 @@
 
             if (s.paired) {
                 document.getElementById('cloud-camera').textContent =
-                    s.source.name + (s.source.from_web_app ? '' : ' (aucune caméra dans l’application)');
+                    s.source.name + (s.source.from_web_app ? '' : ' (aucune caméra dans l’application)')
+                    + (s.source.receiving === false ? ' — aucune image reçue' : '');
                 document.getElementById('cloud-contact').textContent = ago(s.seconds_since_contact);
                 document.getElementById('cloud-last-alert').textContent = s.last_alert
                     ? ALERT_LABELS[s.last_alert.type] + ', ' + ago(s.last_alert.seconds_ago) + (s.last_alert.clip ? ' (clip envoyé)' : '')
@@ -1056,7 +1057,7 @@
                 if (!r.ok) { err.textContent = data.error; return; }
                 document.getElementById('cloud-code').value = '';
                 addLog('🔗 Boîtier associé au compte SafeNest');
-                renderCloud({ ...data, source: { name: '…', from_web_app: false } });
+                renderCloud({ ...data, source: { name: '…', from_web_app: false, receiving: true } });
                 setTimeout(loadCloud, 1500);
             } catch (e2) {
                 err.textContent = 'Le boîtier ne répond pas. Réessayez.';
@@ -1069,7 +1070,7 @@
         async function testCloud() {
             const err = document.getElementById('cloud-paired-error');
             err.textContent = '';
-            const r = await fetch('/api/cloud/test', { method: 'POST' });
+            const r = await fetch('/api/cloud/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
             const data = await r.json();
             if (data.ok) { addLog('✅ Connexion à SafeNest vérifiée'); } else { err.textContent = data.error; }
             loadCloud();
@@ -1077,7 +1078,7 @@
 
         async function unpairCloud() {
             if (!confirm('Dissocier ce boîtier ? Vos proches ne recevront plus ses alertes tant qu’il ne sera pas associé à nouveau.')) return;
-            await fetch('/api/cloud/unpair', { method: 'POST' });
+            await fetch('/api/cloud/unpair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
             addLog('Boîtier dissocié du compte SafeNest');
             loadCloud();
         }

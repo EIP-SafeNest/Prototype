@@ -22,6 +22,9 @@ import numpy as np
 
 log = logging.getLogger("safenest.clip")
 
+# Durée maximale d'encodage d'un clip (3 min d'images s'encodent en quelques secondes sur un Pi 5)
+ENCODE_TIMEOUT_S = 120
+
 
 class Clip:
     """Copie figée des images au moment de l'incident, encodée à la demande."""
@@ -61,17 +64,22 @@ class Clip:
             "-pix_fmt", "yuv420p", "-movflags", "+faststart",
             path,
         ]
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+        )
+        # communicate() écrit les images et lit les messages d'erreur en même temps :
+        # pas de blocage si ffmpeg écrit beaucoup, et arrêt forcé au-delà du délai
         try:
-            for _, jpeg in self.frames:
-                process.stdin.write(jpeg)
-        except BrokenPipeError:
-            pass  # ffmpeg s'est arrêté : l'erreur est lue ci-dessous
-        finally:
-            process.stdin.close()
-        stderr = process.stderr.read().decode(errors="replace")
-        if process.wait(timeout=120) != 0:
-            raise RuntimeError(f"ffmpeg a échoué : {stderr.strip()[:300]}")
+            _, stderr = process.communicate(
+                input=b"".join(jpeg for _, jpeg in self.frames), timeout=ENCODE_TIMEOUT_S
+            )
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise RuntimeError(f"ffmpeg a dépassé {ENCODE_TIMEOUT_S} s : encodage abandonné")
+        if process.returncode != 0:
+            message = stderr.decode(errors="replace").strip()[:300]
+            raise RuntimeError(f"ffmpeg a échoué : {message}")
 
     def _export_opencv(self, path: str) -> None:
         first = cv2.imdecode(np.frombuffer(self.frames[0][1], np.uint8), cv2.IMREAD_COLOR)

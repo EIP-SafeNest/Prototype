@@ -20,6 +20,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -37,6 +38,12 @@ RETRY_DELAYS_S = (0, 2, 5, 10, 20, 40)
 class CloudError(Exception):
     """Erreur de communication avec l'API (message lisible pour l'utilisateur)."""
 
+    def __init__(self, message: str, status: int | None = None, retryable: bool = False):
+        super().__init__(message)
+        self.status = status
+        # Vrai pour les erreurs passagères (réseau, 5xx, 429) : un nouvel essai peut réussir
+        self.retryable = retryable
+
 
 def _state_file() -> str:
     base = os.environ.get("SAFENEST_STATE_DIR") or os.path.join(
@@ -51,9 +58,10 @@ def _iso(timestamp: float) -> str:
 
 def _error_message(response: requests.Response) -> str:
     try:
-        message = response.json().get("message")
+        body = response.json()
     except ValueError:
-        message = None
+        body = None
+    message = body.get("message") if isinstance(body, dict) else None
     if isinstance(message, list):
         message = " ; ".join(str(m) for m in message)
     return message or f"Erreur {response.status_code} de l'API"
@@ -110,8 +118,14 @@ class SafeNestCloud:
             json.dump(self._state, f)
         os.replace(tmp, path)
 
-    def _forget(self, reason: str | None) -> None:
+    def _forget(self, reason: str | None, only_token: str | None = None) -> None:
+        """
+        Oublie le jeton. Avec only_token, seulement s'il n'a pas changé entre-temps :
+        un refus arrivé en retard ne doit pas effacer un nouvel appairage.
+        """
         with self._lock:
+            if only_token is not None and self._state.get("device_token") != only_token:
+                return
             self._state = {}
             self._save_state()
         self._set_cameras([])
@@ -122,6 +136,7 @@ class SafeNestCloud:
     def _request(self, method: str, path: str, body: dict | None = None,
                  auth: bool = True, timeout: float = 10) -> dict | list | None:
         headers = {}
+        token = None
         if auth:
             token = self._state.get("device_token")
             if not token:
@@ -134,19 +149,33 @@ class SafeNestCloud:
             )
         except requests.RequestException as error:
             self.last_error = f"API SafeNest injoignable ({self.api_url})"
-            raise CloudError(self.last_error) from error
+            raise CloudError(self.last_error, retryable=True) from error
 
         if response.status_code == 401 and auth:
             # Boîtier supprimé dans la web app, ou nouveau code d'appairage généré
-            self._forget("Le boîtier a été dissocié depuis la web app : appairez-le à nouveau.")
-            raise CloudError(self.last_error)
+            self._forget(
+                "Le boîtier a été dissocié depuis la web app : appairez-le à nouveau.",
+                only_token=token,
+            )
+            raise CloudError("Jeton du boîtier refusé", status=401)
         if not response.ok:
             self.last_error = _error_message(response)
-            raise CloudError(self.last_error)
+            raise CloudError(
+                self.last_error,
+                status=response.status_code,
+                retryable=response.status_code >= 500 or response.status_code == 429,
+            )
+
+        try:
+            data = response.json() if response.content else None
+        except ValueError as error:
+            # Proxy, portail captif… : une page HTML au lieu de la réponse de l'API
+            self.last_error = "Réponse inattendue de l'API SafeNest"
+            raise CloudError(self.last_error, status=response.status_code, retryable=True) from error
 
         self.last_contact = time.time()
         self.last_error = None
-        return response.json() if response.content else None
+        return data
 
     # ------------------------------------------------------------------ appairage
 
@@ -158,6 +187,8 @@ class SafeNestCloud:
             {"pairing_code": code.strip(), "firmware_version": FIRMWARE_VERSION},
             auth=False,
         )
+        if not isinstance(data, dict) or not data.get("device_id") or not data.get("device_token"):
+            raise CloudError("Réponse inattendue de l'API SafeNest (appairage)")
         with self._lock:
             self._state = {
                 "device_id": data["device_id"],
@@ -189,7 +220,10 @@ class SafeNestCloud:
             "/device/heartbeat",
             {"firmware_version": FIRMWARE_VERSION, "cameras": statuses},
         )
-        self._set_cameras(data["cameras"])
+        cameras = data.get("cameras") if isinstance(data, dict) else None
+        if not isinstance(cameras, list):
+            raise CloudError("Réponse inattendue de l'API SafeNest (caméras)", retryable=True)
+        self._set_cameras(cameras)
         return self.cameras
 
     def _heartbeat_loop(self) -> None:
@@ -199,6 +233,9 @@ class SafeNestCloud:
                     self.heartbeat()
                 except CloudError as error:
                     log.warning("Signe de vie : %s", error)
+                except Exception:
+                    # Jamais d'arrêt du signe de vie : sans lui, le boîtier paraît hors ligne
+                    log.exception("Signe de vie : erreur inattendue")
             self._wake.wait(HEARTBEAT_INTERVAL_S)
             self._wake.clear()
 
@@ -250,6 +287,9 @@ class SafeNestCloud:
             "type": incident_type,
             "occurred_at": _iso(occurred_at),
             "with_clip": clip is not None,
+            # Même clé à chaque essai : si une requête a abouti sans que la réponse arrive,
+            # l'API ne crée pas une seconde alerte (et ne prévient pas les contacts deux fois)
+            "idempotency_key": str(uuid.uuid4()),
         }
         if confidence is not None:
             body["confidence"] = round(max(0.0, min(1.0, float(confidence))), 3)
@@ -264,9 +304,13 @@ class SafeNestCloud:
                 result = self._request("POST", "/device/alerts", body)
                 break
             except CloudError as error:
-                if not self.paired:
+                if not self.paired or not error.retryable:
+                    # Refus définitif (données invalides, boîtier révoqué) : réessayer ne sert à rien
+                    log.error("Alerte %s refusée : %s", incident_type, error)
                     return
                 log.warning("Alerte %s non envoyée (%s), nouvel essai…", incident_type, error)
+            except Exception:
+                log.exception("Alerte %s : erreur inattendue, nouvel essai…", incident_type)
         if result is None:
             log.error("Alerte %s abandonnée après %d essais", incident_type, len(RETRY_DELAYS_S))
             return

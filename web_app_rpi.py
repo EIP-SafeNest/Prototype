@@ -21,6 +21,7 @@ import numpy as np
 from datetime import datetime
 import os
 import urllib.request
+from urllib.parse import urlparse
 
 from safenest_cloud import SafeNestCloud, CloudError
 from clip_buffer import ClipBuffer
@@ -71,6 +72,7 @@ class DetectionState:
         self.source_signature = None
         self.last_frame_time = 0
         self.source_changed = False
+        self.mode = ""
         self.last_incident_time = {}
         self.last_unpaired_warning = 0
 
@@ -104,13 +106,16 @@ cloud.on_cameras_changed(on_cloud_cameras_changed)
 
 
 def current_source():
-    """Source à analyser : la caméra configurée dans la web app, sinon la configuration locale."""
+    """
+    Source à analyser : la caméra configurée dans la web app, sinon la configuration
+    locale (URL réseau, ou index de webcam). Renvoie (source, id caméra web app, nom).
+    """
     camera = cloud.active_camera()
     if camera:
         return camera["stream_url"], camera["id"], camera["name"]
     if config.video_url and config.video_url.strip():
         return config.video_url.strip(), None, "Configuration locale"
-    return None, None, f"Webcam {config.camera_index}"
+    return int(config.camera_index), None, f"Webcam {config.camera_index}"
 
 
 def download_model():
@@ -299,24 +304,44 @@ STREAM_TIMEOUT_S = 5
 
 def open_capture():
     """Ouvre la source vidéo (caméra de la web app, URL réseau locale ou webcam)."""
-    video_source, camera_id, camera_name = current_source()
+    source, camera_id, camera_name = current_source()
+    signature = (source, camera_id)
+    if signature != state.source_signature:
+        # Autre caméra (autres dimensions) : ses images d'avant ne vont pas dans le clip.
+        # Une simple reconnexion à la même caméra garde, elle, les minutes déjà en mémoire.
+        clips.clear()
     state.active_camera_id = camera_id
-    state.source_signature = (video_source, camera_id)
+    state.source_signature = signature
     state.source_changed = False
-    # Nouvelle source : les images d'avant (autre caméra, autres dimensions) ne vont plus dans le clip
-    clips.clear()
-    if video_source:
-        print(f"[VIDEO] {camera_name}")
+    print(f"[VIDEO] {camera_name}")
+    if isinstance(source, str):
         try:
             # Délais max pour ne jamais rester bloqué sur un flux réseau
-            return cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, [
+            return cv2.VideoCapture(source, cv2.CAP_FFMPEG, [
                 cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
                 cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000,
             ])
         except Exception:
-            return cv2.VideoCapture(video_source)
-    print(f"[VIDEO] Webcam {config.camera_index}")
-    return cv2.VideoCapture(config.camera_index)
+            return cv2.VideoCapture(source)
+    return cv2.VideoCapture(source)
+
+
+def reopen_capture(cap):
+    """Ferme le flux et rouvre la source courante (reconnexion ou changement de caméra)."""
+    cap.release()
+    cap = open_capture()
+    state.cap = cap
+    if not cap.isOpened():
+        set_video_status(False)
+    return cap
+
+
+def set_video_status(receiving):
+    """Statut affiché : « Actif » si la caméra envoie des images, sinon l'erreur."""
+    status = f"Actif ({state.mode})" if receiving else "Caméra injoignable, nouvel essai…"
+    if status != state.status:
+        state.status = status
+        socketio.emit('status_update', {'status': status, 'running': True})
 
 
 def detection_loop():
@@ -325,10 +350,8 @@ def detection_loop():
     state.net, state.output_layers = load_yolo_model()
     state.use_yolo = state.net is not None
     
-    mode = "YOLO DNN" if state.use_yolo else "Couleur HSV"
-    print(f"[MODE] Détection: {mode}")
-    state.status = f"Actif ({mode})"
-    socketio.emit('status_update', {'status': state.status, 'running': True})
+    state.mode = "YOLO DNN" if state.use_yolo else "Couleur HSV"
+    print(f"[MODE] Détection: {state.mode}")
     
     # Chaque démarrage a son propre identifiant : une ancienne boucle encore
     # bloquée sur une lecture s'arrête d'elle-même au lieu de partager la caméra.
@@ -339,10 +362,11 @@ def detection_loop():
 
     # Le boîtier peut démarrer avant la caméra : en cas d'échec on réessaie
     # indéfiniment au lieu d'abandonner (la boucle tourne en service au démarrage).
-    cap = open_capture() or cv2.VideoCapture()
+    cap = open_capture()
+    state.cap = cap
     if not cap.isOpened():
         print("[VIDEO] Caméra injoignable, nouvel essai dans quelques secondes...")
-    state.cap = cap
+        set_video_status(False)
 
     analysis_interval = 1.0 / config.analysis_fps
     last_analysis_time = 0
@@ -353,9 +377,7 @@ def detection_loop():
         # Caméra changée dans la web app (ou appairage) : on bascule tout de suite
         if state.source_changed:
             print("[VIDEO] Changement de caméra")
-            cap.release()
-            cap = open_capture() or cv2.VideoCapture()
-            state.cap = cap
+            cap = reopen_capture(cap)
             last_frame_time = time.time()
 
         ret, frame = cap.read() if cap.isOpened() else (False, None)
@@ -365,16 +387,16 @@ def detection_loop():
             # Flux coupé, figé ou jamais ouvert : on se reconnecte
             if time.time() - last_frame_time > STREAM_TIMEOUT_S:
                 print("[VIDEO] Plus d'image, reconnexion...")
-                cap.release()
+                set_video_status(False)
                 time.sleep(1)
-                cap = open_capture() or cv2.VideoCapture()
-                state.cap = cap
+                cap = reopen_capture(cap)
                 last_frame_time = time.time()
             else:
                 time.sleep(0.1)
             continue
         last_frame_time = time.time()
         state.last_frame_time = last_frame_time
+        set_video_status(True)
         clips.add(frame)
 
         state.frame_count += 1
@@ -496,16 +518,41 @@ def api_stats():
 
 # --- Compte SafeNest (appairage avec la web app) ------------------------------
 
+def is_local_page_request():
+    """
+    Les actions du compte (associer, dissocier) ne sont acceptées que depuis
+    l'interface du boîtier elle-même : JSON obligatoire (une autre page web ne
+    peut pas en envoyer sans autorisation du navigateur) et même origine.
+    """
+    if not request.is_json:
+        return False
+    origin = request.headers.get('Origin')
+    return not origin or urlparse(origin).netloc == request.host
+
+
+def forbidden_origin():
+    return jsonify({'error': "Action refusée : utilisez l'interface du boîtier."}), 403
+
+
 @app.route('/api/cloud')
 def api_cloud_status():
     status = cloud.status()
     _, camera_id, camera_name = current_source()
-    status['source'] = {'name': camera_name, 'from_web_app': camera_id is not None}
+    status['source'] = {
+        'name': camera_name,
+        'from_web_app': camera_id is not None,
+        # Faux si la surveillance tourne mais qu'aucune image n'arrive depuis 10 s
+        'receiving': (not state.running) or time.time() - state.last_frame_time < 10,
+    }
     return jsonify(status)
 
 @app.route('/api/cloud/pair', methods=['POST'])
 def api_cloud_pair():
-    code = ((request.json or {}).get('code') or '').strip()
+    if not is_local_page_request():
+        return forbidden_origin()
+    if cloud.paired:
+        return jsonify({'error': "Ce boîtier est déjà associé à un compte : dissociez-le d'abord."}), 409
+    code = ((request.get_json(silent=True) or {}).get('code') or '').strip()
     if not code:
         return jsonify({'error': "Saisissez le code affiché dans l'application SafeNest"}), 400
     try:
@@ -516,6 +563,8 @@ def api_cloud_pair():
 
 @app.route('/api/cloud/unpair', methods=['POST'])
 def api_cloud_unpair():
+    if not is_local_page_request():
+        return forbidden_origin()
     cloud.unpair()
     state.source_changed = True
     return jsonify(cloud.status())
@@ -523,10 +572,14 @@ def api_cloud_unpair():
 @app.route('/api/cloud/test', methods=['POST'])
 def api_cloud_test():
     """Vérifie la connexion à l'API (signe de vie immédiat)."""
+    if not is_local_page_request():
+        return forbidden_origin()
     try:
         cloud.heartbeat()
     except CloudError as error:
         return jsonify({'ok': False, 'error': str(error)}), 502
+    except Exception:
+        return jsonify({'ok': False, 'error': "Erreur inattendue, voir le journal du boîtier"}), 500
     return jsonify({'ok': True, **cloud.status()})
 
 

@@ -32,6 +32,10 @@ if [[ "$(systemctl is-enabled avahi-daemon.service 2>/dev/null || true)" == mask
 fi
 "${SUDO[@]}" systemctl enable --now avahi-daemon
 
+echo "==> Dépendances Python du boîtier"
+# requests sert à joindre l'API (install.sh ne l'installe pas explicitement)
+"$PYTHON" -m pip install -q requests
+
 echo "==> Configuration ($CONFIG_DIR/env)"
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"

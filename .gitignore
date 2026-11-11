@@ -1,7 +1,13 @@
 fire_yolov8.pt
-*.pt*.weights
+*.pt
+*.weights
 *.cfg
 .rpi_mode
 venv/
 __pycache__/
 .venv-camera/
+
+# Secrets locaux (le modèle .env.example reste versionné)
+.env
+.env.*
+!.env.example

@@ -10,15 +10,24 @@ import numpy as np
 from openai import OpenAI
 from twilio.rest import Client
 from datetime import datetime
+import os
 
-# Configuration
-OPENAI_API_KEY = "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"
+from dotenv import load_dotenv
+
+# Configuration : lue dans .env (jamais de clé ni de numéro écrits dans le code)
+load_dotenv()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # Twilio Configuration (WhatsApp Sandbox)
-TWILIO_SID = "AC5008cc02f11dd209bbe632befa2d9808"
-TWILIO_AUTH_TOKEN = "67907e241d8371c65d25fd1d167b77be"
-TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"  # Twilio Sandbox WhatsApp
-DESTINATION_WHATSAPP = "whatsapp:+33684466232"  # Your WhatsApp number
+TWILIO_SID = os.environ.get("TWILIO_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")  # Sandbox Twilio
+DESTINATION_WHATSAPP = os.environ.get("DESTINATION_WHATSAPP")  # ex. whatsapp:+33600000000
+
+_missing = [name for name in ("OPENAI_API_KEY", "TWILIO_SID", "TWILIO_AUTH_TOKEN", "DESTINATION_WHATSAPP")
+            if not os.environ.get(name)]
+if _missing:
+    raise SystemExit(f"Variables manquantes dans .env : {', '.join(_missing)} (voir .env.example)")
 
 
 def test_openai_vision():

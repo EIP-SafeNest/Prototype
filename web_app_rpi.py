@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-Web Interface for Fire Detection System - Raspberry Pi Version
-Uses OpenCV DNN to run YOLO models WITHOUT PyTorch!
-Real neural network inference on ARM.
+SafeNest - application du boîtier (Raspberry Pi).
+
+- analyse le flux vidéo en local (YOLO via OpenCV DNN, sans PyTorch) ;
+- interface locale : http://safenest.local (appairage, réglages, image en direct) ;
+- envoie les alertes à l'API SafeNest avec le clip des dernières minutes
+  (voir safenest_cloud.py et CLOUD.md).
+
+Pour brancher un nouveau modèle (ex. détection de chute) : appeler
+report_incident("fall", confidence) depuis la boucle de détection.
 """
 
 from flask import Flask, render_template, Response, jsonify, request
@@ -10,31 +16,35 @@ from flask_socketio import SocketIO, emit
 import cv2
 import time
 import threading
+import logging
 import numpy as np
 from datetime import datetime
-from twilio.rest import Client
 import os
 import urllib.request
+from urllib.parse import urlparse
+
+from safenest_cloud import SafeNestCloud, CloudError
+from clip_buffer import ClipBuffer
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s : %(message)s")
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Configuration
+# Configuration (surchargeable par variables d'environnement, cf. deploy/safenest.env.example)
 class Config:
-    video_url = "http://admin:admin@10.74.255.99:8081/video"
+    # Source utilisée tant que le boîtier n'a pas de caméra configurée dans la web app
+    video_url = os.environ.get("SAFENEST_VIDEO_URL", "http://admin:admin@10.74.255.99:8081/video")
     camera_index = 0
     analysis_fps = 5
     fire_sensitivity = 50
 
 config = Config()
 
-# Twilio WhatsApp
-TWILIO_SID = "AC5008cc02f11dd209bbe632befa2d9808"
-TWILIO_AUTH_TOKEN = "08fcabd66aa4d6370f48b70abd9a1f40"
-TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"
-DESTINATION_WHATSAPP = "whatsapp:+33684466232"
-
-NOTIFICATION_COOLDOWN = 30
+# Délai minimal entre deux alertes du même type (évite d'envoyer 10 SMS pour le même feu)
+NOTIFICATION_COOLDOWN = int(os.environ.get("SAFENEST_ALERT_COOLDOWN", "120"))
+# Durée de vidéo gardée en mémoire et envoyée avec l'alerte (CdC : 3 minutes)
+CLIP_SECONDS = int(os.environ.get("SAFENEST_CLIP_SECONDS", "180"))
 
 # YOLO model paths
 MODEL_DIR = os.path.dirname(__file__)
@@ -47,7 +57,6 @@ class DetectionState:
         self.running = False
         self.fire_detected = False
         self.fire_bbox = None
-        self.last_notification_time = 0
         self.frame_count = 0
         self.detection_count = 0
         self.current_frame = None
@@ -58,9 +67,55 @@ class DetectionState:
         self.classes = ["fire", "smoke"]
         self.use_yolo = False
         self.run_id = 0
-        
+        # Caméra de la web app en cours d'analyse (None = source locale)
+        self.active_camera_id = None
+        self.source_signature = None
+        self.last_frame_time = 0
+        self.source_changed = False
+        self.mode = ""
+        self.last_incident_time = {}
+        self.last_unpaired_warning = 0
+
 state = DetectionState()
-twilio_client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
+
+
+def camera_statuses():
+    """État de la caméra analysée, transmis à l'API à chaque signe de vie."""
+    if not state.running or not state.active_camera_id:
+        return []
+    ok = time.time() - state.last_frame_time < 10
+    return [{"id": state.active_camera_id, "status": "ok" if ok else "error"}]
+
+
+cloud = SafeNestCloud(camera_status_provider=camera_statuses)
+clips = ClipBuffer(seconds=CLIP_SECONDS)
+
+
+def on_cloud_cameras_changed(cameras):
+    """
+    Caméras modifiées dans la web app : la boucle de détection rouvre la source,
+    mais seulement si la caméra analysée ou son URL a changé (le statut, lui,
+    change à chaque signe de vie).
+    """
+    url, camera_id, _ = current_source()
+    if (url, camera_id) != state.source_signature:
+        state.source_changed = True
+
+
+cloud.on_cameras_changed(on_cloud_cameras_changed)
+
+
+def current_source():
+    """
+    Source à analyser : la caméra configurée dans la web app, sinon la configuration
+    locale (URL réseau, ou index de webcam). Renvoie (source, id caméra web app, nom).
+    """
+    camera = cloud.active_camera()
+    if camera:
+        return camera["stream_url"], camera["id"], camera["name"]
+    if config.video_url and config.video_url.strip():
+        return config.video_url.strip(), None, "Configuration locale"
+    return int(config.camera_index), None, f"Webcam {config.camera_index}"
 
 
 def download_model():
@@ -200,24 +255,37 @@ def detect_fire_color(frame):
     return False, None, 0.0, None
 
 
-def send_whatsapp_notification():
-    """Send WhatsApp alert."""
-    current_time = time.time()
-    if current_time - state.last_notification_time < NOTIFICATION_COOLDOWN:
+def report_incident(incident_type, confidence=None):
+    """
+    Signale un incident au cloud SafeNest, qui prévient les contacts d'urgence
+    (SMS, email, push) et reçoit le clip des dernières minutes.
+
+    Point d'entrée pour tous les modèles de détection :
+        report_incident("fire", 0.87)   # départ de feu
+        report_incident("fall", 0.92)   # chute (modèle de l'équipe IA)
+
+    Renvoie True si l'alerte part, False si elle est ignorée (délai minimal ou boîtier non appairé).
+    """
+    now = time.time()
+    if now - state.last_incident_time.get(incident_type, 0) < NOTIFICATION_COOLDOWN:
         return False
-    
-    try:
-        message = twilio_client.messages.create(
-            body=f"🔥 ALERTE FEU: Détecté à {datetime.now().strftime('%H:%M:%S')}!",
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=DESTINATION_WHATSAPP
-        )
-        state.last_notification_time = current_time
-        print(f"[WHATSAPP] Envoyé: {message.sid}")
-        return True
-    except Exception as e:
-        print(f"[ERROR] Twilio: {e}")
+    if not cloud.paired:
+        # Un message par minute au plus (la détection tourne plusieurs fois par seconde)
+        if now - state.last_unpaired_warning > 60:
+            state.last_unpaired_warning = now
+            print(f"[CLOUD] {incident_type} détecté mais boîtier non appairé : aucune alerte envoyée")
         return False
+
+    state.last_incident_time[incident_type] = now
+    cloud.report_incident(
+        incident_type,
+        confidence=confidence,
+        camera_id=state.active_camera_id,
+        clip=clips.snapshot(),
+        occurred_at=now,
+    )
+    socketio.emit('cloud_alert', {'type': incident_type, 'timestamp': datetime.now().strftime('%H:%M:%S')})
+    return True
 
 
 def draw_detection_box(frame, detected, bbox=None, label="FEU"):
@@ -235,20 +303,45 @@ STREAM_TIMEOUT_S = 5
 
 
 def open_capture():
-    """Ouvre la source vidéo configurée (URL réseau ou webcam locale)."""
-    video_source = config.video_url.strip() if config.video_url else None
-    if video_source:
-        print(f"[VIDEO] {video_source}")
+    """Ouvre la source vidéo (caméra de la web app, URL réseau locale ou webcam)."""
+    source, camera_id, camera_name = current_source()
+    signature = (source, camera_id)
+    if signature != state.source_signature:
+        # Autre caméra (autres dimensions) : ses images d'avant ne vont pas dans le clip.
+        # Une simple reconnexion à la même caméra garde, elle, les minutes déjà en mémoire.
+        clips.clear()
+    state.active_camera_id = camera_id
+    state.source_signature = signature
+    state.source_changed = False
+    print(f"[VIDEO] {camera_name}")
+    if isinstance(source, str):
         try:
             # Délais max pour ne jamais rester bloqué sur un flux réseau
-            return cv2.VideoCapture(video_source, cv2.CAP_FFMPEG, [
+            return cv2.VideoCapture(source, cv2.CAP_FFMPEG, [
                 cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000,
                 cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000,
             ])
         except Exception:
-            return cv2.VideoCapture(video_source)
-    print(f"[VIDEO] Webcam {config.camera_index}")
-    return cv2.VideoCapture(config.camera_index)
+            return cv2.VideoCapture(source)
+    return cv2.VideoCapture(source)
+
+
+def reopen_capture(cap):
+    """Ferme le flux et rouvre la source courante (reconnexion ou changement de caméra)."""
+    cap.release()
+    cap = open_capture()
+    state.cap = cap
+    if not cap.isOpened():
+        set_video_status(False)
+    return cap
+
+
+def set_video_status(receiving):
+    """Statut affiché : « Actif » si la caméra envoie des images, sinon l'erreur."""
+    status = f"Actif ({state.mode})" if receiving else "Caméra injoignable, nouvel essai…"
+    if status != state.status:
+        state.status = status
+        socketio.emit('status_update', {'status': status, 'running': True})
 
 
 def detection_loop():
@@ -257,10 +350,8 @@ def detection_loop():
     state.net, state.output_layers = load_yolo_model()
     state.use_yolo = state.net is not None
     
-    mode = "YOLO DNN" if state.use_yolo else "Couleur HSV"
-    print(f"[MODE] Détection: {mode}")
-    state.status = f"Actif ({mode})"
-    socketio.emit('status_update', {'status': state.status, 'running': True})
+    state.mode = "YOLO DNN" if state.use_yolo else "Couleur HSV"
+    print(f"[MODE] Détection: {state.mode}")
     
     # Chaque démarrage a son propre identifiant : une ancienne boucle encore
     # bloquée sur une lecture s'arrête d'elle-même au lieu de partager la caméra.
@@ -269,14 +360,13 @@ def detection_loop():
     def still_mine():
         return state.running and state.run_id == my_run
 
+    # Le boîtier peut démarrer avant la caméra : en cas d'échec on réessaie
+    # indéfiniment au lieu d'abandonner (la boucle tourne en service au démarrage).
     cap = open_capture()
-    if cap is None or not cap.isOpened():
-        if state.run_id == my_run:
-            state.status = "Erreur vidéo"
-            socketio.emit('status_update', {'status': state.status, 'running': False})
-            state.running = False
-        return
     state.cap = cap
+    if not cap.isOpened():
+        print("[VIDEO] Caméra injoignable, nouvel essai dans quelques secondes...")
+        set_video_status(False)
 
     analysis_interval = 1.0 / config.analysis_fps
     last_analysis_time = 0
@@ -284,29 +374,34 @@ def detection_loop():
     last_frame_time = time.time()
 
     while still_mine():
-        ret, frame = cap.read()
+        # Caméra changée dans la web app (ou appairage) : on bascule tout de suite
+        if state.source_changed:
+            print("[VIDEO] Changement de caméra")
+            cap = reopen_capture(cap)
+            last_frame_time = time.time()
+
+        ret, frame = cap.read() if cap.isOpened() else (False, None)
         if not still_mine():
             break
         if not ret:
-            # Flux coupé ou figé : on se reconnecte
+            # Flux coupé, figé ou jamais ouvert : on se reconnecte
             if time.time() - last_frame_time > STREAM_TIMEOUT_S:
                 print("[VIDEO] Plus d'image, reconnexion...")
-                cap.release()
+                set_video_status(False)
                 time.sleep(1)
-                cap = open_capture()
-                if cap is None:
-                    time.sleep(2)
-                    cap = cv2.VideoCapture()
-                state.cap = cap
+                cap = reopen_capture(cap)
                 last_frame_time = time.time()
             else:
                 time.sleep(0.1)
             continue
         last_frame_time = time.time()
-        
+        state.last_frame_time = last_frame_time
+        set_video_status(True)
+        clips.add(frame)
+
         state.frame_count += 1
         current_time = time.time()
-        
+
         if current_time - last_analysis_time >= analysis_interval:
             last_analysis_time = current_time
             
@@ -326,12 +421,14 @@ def detection_loop():
                 state.detection_count += 1
                 socketio.emit('detection', {
                     'detected': True,
-                    'confidence': conf,
+                    'confidence': float(conf),
                     'label': label,
                     'method': 'YOLO' if state.use_yolo else 'Color',
+                    'count': state.detection_count,
                     'timestamp': datetime.now().strftime('%H:%M:%S')
                 })
-                send_whatsapp_notification()
+                # Flammes et fumée sont toutes deux des alertes « départ de feu »
+                report_incident("fire", float(conf))
         
         display_frame = draw_detection_box(
             frame.copy(), state.fire_detected, state.fire_bbox, last_label)
@@ -395,6 +492,9 @@ def api_config():
             config.analysis_fps = max(1, min(30, int(data['analysis_fps'])))
         if 'fire_sensitivity' in data:
             config.fire_sensitivity = max(0, min(100, int(data['fire_sensitivity'])))
+        # Nouvelle source locale : prise en compte tout de suite si la détection tourne
+        if current_source()[:2] != state.source_signature:
+            state.source_changed = True
         return jsonify({'success': True})
     
     return jsonify({
@@ -416,13 +516,79 @@ def api_stats():
     })
 
 
+# --- Compte SafeNest (appairage avec la web app) ------------------------------
+
+def is_local_page_request():
+    """
+    Les actions du compte (associer, dissocier) ne sont acceptées que depuis
+    l'interface du boîtier elle-même : JSON obligatoire (une autre page web ne
+    peut pas en envoyer sans autorisation du navigateur) et même origine.
+    """
+    if not request.is_json:
+        return False
+    origin = request.headers.get('Origin')
+    return not origin or urlparse(origin).netloc == request.host
+
+
+def forbidden_origin():
+    return jsonify({'error': "Action refusée : utilisez l'interface du boîtier."}), 403
+
+
+@app.route('/api/cloud')
+def api_cloud_status():
+    status = cloud.status()
+    _, camera_id, camera_name = current_source()
+    status['source'] = {
+        'name': camera_name,
+        'from_web_app': camera_id is not None,
+        # Faux si la surveillance tourne mais qu'aucune image n'arrive depuis 10 s
+        'receiving': (not state.running) or time.time() - state.last_frame_time < 10,
+    }
+    return jsonify(status)
+
+@app.route('/api/cloud/pair', methods=['POST'])
+def api_cloud_pair():
+    if not is_local_page_request():
+        return forbidden_origin()
+    if cloud.paired:
+        return jsonify({'error': "Ce boîtier est déjà associé à un compte : dissociez-le d'abord."}), 409
+    code = ((request.get_json(silent=True) or {}).get('code') or '').strip()
+    if not code:
+        return jsonify({'error': "Saisissez le code affiché dans l'application SafeNest"}), 400
+    try:
+        cloud.pair(code)
+    except CloudError as error:
+        return jsonify({'error': str(error)}), 400
+    return jsonify(cloud.status())
+
+@app.route('/api/cloud/unpair', methods=['POST'])
+def api_cloud_unpair():
+    if not is_local_page_request():
+        return forbidden_origin()
+    cloud.unpair()
+    state.source_changed = True
+    return jsonify(cloud.status())
+
+@app.route('/api/cloud/test', methods=['POST'])
+def api_cloud_test():
+    """Vérifie la connexion à l'API (signe de vie immédiat)."""
+    if not is_local_page_request():
+        return forbidden_origin()
+    try:
+        cloud.heartbeat()
+    except CloudError as error:
+        return jsonify({'ok': False, 'error': str(error)}), 502
+    except Exception:
+        return jsonify({'ok': False, 'error': "Erreur inattendue, voir le journal du boîtier"}), 500
+    return jsonify({'ok': True, **cloud.status()})
+
+
 # SocketIO
 @socketio.on('connect')
 def on_connect():
     emit('status_update', {'status': state.status, 'running': state.running})
 
-@socketio.on('start_detection')
-def on_start():
+def start_detection():
     if not state.running:
         state.running = True
         state.run_id += 1
@@ -430,29 +596,24 @@ def on_start():
         state.detection_count = 0
         threading.Thread(target=detection_loop, daemon=True).start()
 
+@socketio.on('start_detection')
+def on_start():
+    start_detection()
+
 @socketio.on('stop_detection')
 def on_stop():
     state.running = False
 
-@socketio.on('test_notification')
-def on_test():
-    try:
-        message = twilio_client.messages.create(
-            body=f"🧪 TEST: Système actif - {datetime.now().strftime('%H:%M:%S')}",
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=DESTINATION_WHATSAPP
-        )
-        emit('notification_result', {'success': True, 'sid': message.sid})
-    except Exception as e:
-        emit('notification_result', {'success': False, 'error': str(e)})
-
 
 if __name__ == '__main__':
+    port = int(os.environ.get("PORT", "5001"))
     print("=" * 50)
-    print("🔥 Fire Detection - OpenCV DNN (No PyTorch!)")
+    print("SafeNest - boîtier (OpenCV DNN, sans PyTorch)")
+    print(f"Interface locale : http://0.0.0.0:{port}")
+    print(f"API SafeNest     : {cloud.api_url} ({'appairé' if cloud.paired else 'non appairé'})")
     print("=" * 50)
-    print("Utilise YOLO via OpenCV DNN")
-    print("Compatible Raspberry Pi ARM")
-    print("Interface: http://0.0.0.0:5001")
-    print("=" * 50)
-    socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)
+    cloud.start()
+    # En service, la surveillance démarre seule (SAFENEST_AUTOSTART=0 pour la désactiver)
+    if os.environ.get("SAFENEST_AUTOSTART", "1") != "0":
+        start_detection()
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

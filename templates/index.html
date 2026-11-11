@@ -252,11 +252,73 @@
         .main {
             padding-top: 56px;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
+            gap: 20px;
             min-height: 100vh;
             padding: 80px 24px 24px;
         }
+
+        /* ── Compte SafeNest ────────────────────────── */
+        .cloud-card {
+            width: 100%;
+            max-width: 960px;
+            background: var(--surface);
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 18px;
+            padding: 20px 22px;
+        }
+        .cloud-card[hidden], .cloud-card [hidden] { display: none; }
+        .cloud-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+        .cloud-head h2 { font-size: 1.05rem; margin: 0 0 4px; }
+        .cloud-head p { margin: 0; color: var(--muted); font-size: .9rem; }
+        .cloud-pill {
+            flex-shrink: 0;
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: .78rem;
+            font-weight: 600;
+            background: rgba(255,255,255,.08);
+            color: var(--muted);
+        }
+        .cloud-pill.ok { background: rgba(161,193,129,.18); color: var(--green); }
+        .cloud-pill.warn { background: rgba(254,127,45,.18); color: var(--orange); }
+        .cloud-pair { margin-top: 16px; }
+        .cloud-pair label { font-weight: 600; font-size: .9rem; }
+        .cloud-help { color: var(--muted); font-size: .85rem; margin: 4px 0 10px; }
+        .cloud-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+        .cloud-pair .cloud-row { margin-top: 0; }
+        .cloud-row input {
+            flex: 1 1 180px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,.15);
+            background: var(--bg);
+            color: var(--text);
+            font: 600 1.3rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+            letter-spacing: .25em;
+            text-transform: uppercase;
+        }
+        .cloud-row input:focus { outline: 2px solid var(--orange); outline-offset: 1px; }
+        .cloud-btn {
+            padding: 11px 20px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,.15);
+            background: rgba(255,255,255,.06);
+            color: var(--text);
+            font-weight: 600;
+            font-size: .9rem;
+            font-family: inherit;
+            cursor: pointer;
+        }
+        .cloud-btn.primary { background: var(--orange); border-color: var(--orange); color: #fff; }
+        .cloud-btn.ghost { background: transparent; color: var(--muted); }
+        .cloud-btn:disabled { opacity: .6; cursor: wait; }
+        .cloud-error { color: var(--orange); font-size: .85rem; margin: 8px 0 0; min-height: 1em; }
+        .cloud-paired dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0 0; }
+        .cloud-paired dt { color: var(--muted); font-size: .78rem; }
+        .cloud-paired dd { margin: 2px 0 0; font-weight: 600; }
 
         .video-card {
             position: relative;
@@ -592,6 +654,41 @@
 
     <!-- ── Video Center ─────────────────────────── -->
     <main class="main">
+        <!-- Compte SafeNest : appairage avec la web app (masqué si le serveur ne le gère pas) -->
+        <section class="cloud-card" id="cloud-card" hidden>
+            <div class="cloud-head">
+                <div>
+                    <h2>Compte SafeNest</h2>
+                    <p id="cloud-summary">Chargement…</p>
+                </div>
+                <span class="cloud-pill" id="cloud-pill">…</span>
+            </div>
+
+            <form class="cloud-pair" id="cloud-pair-form" hidden>
+                <label for="cloud-code">Code d'appairage</label>
+                <p class="cloud-help">Dans l'application SafeNest, ajoutez un boîtier : un code de 6 caractères s'affiche. Saisissez-le ici.</p>
+                <div class="cloud-row">
+                    <input id="cloud-code" type="text" inputmode="text" autocomplete="off" autocapitalize="characters"
+                           maxlength="7" placeholder="K7M2QX" aria-describedby="cloud-error">
+                    <button type="submit" class="cloud-btn primary" id="cloud-pair-btn">Associer</button>
+                </div>
+                <p class="cloud-error" id="cloud-error" role="alert"></p>
+            </form>
+
+            <div class="cloud-paired" id="cloud-paired" hidden>
+                <dl>
+                    <div><dt>Caméra analysée</dt><dd id="cloud-camera">—</dd></div>
+                    <div><dt>Dernier contact</dt><dd id="cloud-contact">—</dd></div>
+                    <div><dt>Dernière alerte</dt><dd id="cloud-last-alert">Aucune</dd></div>
+                </dl>
+                <div class="cloud-row">
+                    <button type="button" class="cloud-btn" onclick="testCloud()">Tester la connexion</button>
+                    <button type="button" class="cloud-btn ghost" onclick="unpairCloud()">Dissocier</button>
+                </div>
+                <p class="cloud-error" id="cloud-paired-error" role="alert"></p>
+            </div>
+        </section>
+
         <div class="video-card">
             <img id="video-feed" src="/video_feed" alt="Video Feed">
             <div class="video-controls">
@@ -898,6 +995,101 @@
             };
             poll();
         }
+
+        /* ── Compte SafeNest ──────────────────────── */
+        const ALERT_LABELS = { fall: 'Chute', fire: 'Départ de feu' };
+
+        function ago(seconds) {
+            if (seconds === null || seconds === undefined) return 'jamais';
+            if (seconds < 60) return 'il y a ' + seconds + ' s';
+            if (seconds < 3600) return 'il y a ' + Math.round(seconds / 60) + ' min';
+            return 'il y a ' + Math.round(seconds / 3600) + ' h';
+        }
+
+        function renderCloud(s) {
+            const pill = document.getElementById('cloud-pill');
+            const online = s.paired && s.seconds_since_contact !== null && s.seconds_since_contact < 90 && !s.error;
+            pill.className = 'cloud-pill ' + (online ? 'ok' : 'warn');
+            pill.textContent = !s.paired ? 'Non associé' : online ? 'Connecté' : 'Hors ligne';
+
+            document.getElementById('cloud-summary').textContent = !s.paired
+                ? (s.error || 'Associez ce boîtier à votre compte pour que vos proches reçoivent les alertes.')
+                : (s.error || 'Les alertes sont transmises à vos contacts d’urgence.');
+
+            document.getElementById('cloud-pair-form').hidden = s.paired;
+            document.getElementById('cloud-paired').hidden = !s.paired;
+
+            if (s.paired) {
+                document.getElementById('cloud-camera').textContent =
+                    s.source.name + (s.source.from_web_app ? '' : ' (aucune caméra dans l’application)')
+                    + (s.source.receiving === false ? ' — aucune image reçue' : '');
+                document.getElementById('cloud-contact').textContent = ago(s.seconds_since_contact);
+                document.getElementById('cloud-last-alert').textContent = s.last_alert
+                    ? ALERT_LABELS[s.last_alert.type] + ', ' + ago(s.last_alert.seconds_ago) + (s.last_alert.clip ? ' (clip envoyé)' : '')
+                    : 'Aucune';
+            }
+        }
+
+        async function loadCloud() {
+            try {
+                const r = await fetch('/api/cloud');
+                if (r.status === 404) return; // version sans connexion cloud
+                const s = await r.json();
+                document.getElementById('cloud-card').hidden = false;
+                renderCloud(s);
+            } catch (e) { /* serveur en cours de redémarrage */ }
+        }
+
+        document.getElementById('cloud-pair-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('cloud-pair-btn');
+            const err = document.getElementById('cloud-error');
+            const code = document.getElementById('cloud-code').value.replace(/[\s-]/g, '').toUpperCase();
+            err.textContent = '';
+            if (code.length !== 6) { err.textContent = 'Le code contient 6 caractères.'; return; }
+            btn.disabled = true;
+            btn.textContent = 'Association…';
+            try {
+                const r = await fetch('/api/cloud/pair', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code })
+                });
+                const data = await r.json();
+                if (!r.ok) { err.textContent = data.error; return; }
+                document.getElementById('cloud-code').value = '';
+                addLog('🔗 Boîtier associé au compte SafeNest');
+                renderCloud({ ...data, source: { name: '…', from_web_app: false, receiving: true } });
+                setTimeout(loadCloud, 1500);
+            } catch (e2) {
+                err.textContent = 'Le boîtier ne répond pas. Réessayez.';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Associer';
+            }
+        });
+
+        async function testCloud() {
+            const err = document.getElementById('cloud-paired-error');
+            err.textContent = '';
+            const r = await fetch('/api/cloud/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const data = await r.json();
+            if (data.ok) { addLog('✅ Connexion à SafeNest vérifiée'); } else { err.textContent = data.error; }
+            loadCloud();
+        }
+
+        async function unpairCloud() {
+            if (!confirm('Dissocier ce boîtier ? Vos proches ne recevront plus ses alertes tant qu’il ne sera pas associé à nouveau.')) return;
+            await fetch('/api/cloud/unpair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            addLog('Boîtier dissocié du compte SafeNest');
+            loadCloud();
+        }
+
+        socket.on('cloud_alert', function(data) {
+            addLog('📨 Alerte « ' + (ALERT_LABELS[data.type] || data.type) + ' » envoyée à SafeNest', true);
+            setTimeout(loadCloud, 3000);
+        });
+
+        loadCloud();
+        setInterval(loadCloud, 10000);
 
         /* ── Init ─────────────────────────────────── */
         fetch('/api/stats').then(function(r) { return r.json(); }).then(function(data) {

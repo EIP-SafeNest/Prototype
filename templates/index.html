@@ -696,6 +696,7 @@
                     <div><dt>Caméra analysée</dt><dd id="cloud-camera">—</dd></div>
                     <div><dt>Dernier contact</dt><dd id="cloud-contact">—</dd></div>
                     <div><dt>Dernière alerte</dt><dd id="cloud-last-alert">Aucune</dd></div>
+                    <div id="cloud-pending-row" hidden><dt>En attente d’envoi</dt><dd id="cloud-pending">—</dd></div>
                 </dl>
                 <div class="cloud-row">
                     <button type="button" class="cloud-btn" onclick="testCloud()">Tester la connexion</button>
@@ -1043,6 +1044,12 @@
                 document.getElementById('cloud-last-alert').textContent = s.last_alert
                     ? ALERT_LABELS[s.last_alert.type] + ', ' + ago(s.last_alert.seconds_ago) + (s.last_alert.clip ? ' (clip envoyé)' : '')
                     : 'Aucune';
+                // Alertes gardées sur la carte SD tant que l'API ne répond pas
+                const pending = s.pending_alerts || 0;
+                document.getElementById('cloud-pending-row').hidden = pending === 0;
+                document.getElementById('cloud-pending').textContent = pending === 1
+                    ? '1 alerte gardée sur le boîtier'
+                    : pending + ' alertes gardées sur le boîtier';
             }
         }
 

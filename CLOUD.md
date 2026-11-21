@@ -64,14 +64,44 @@ report_incident("fire", confidence)   # départ de feu (déjà branché)
 ```
 
 La fonction gère le reste : délai minimal entre deux alertes du même type
-(`SAFENEST_ALERT_COOLDOWN`), clip des dernières minutes, envoi en arrière-plan avec
-nouvelles tentatives si le réseau est coupé. Elle ne bloque jamais la boucle d'analyse.
+(`SAFENEST_ALERT_COOLDOWN`), clip des dernières minutes, envoi en arrière-plan et file
+d'attente sur la carte SD si le réseau est coupé. Elle ne bloque jamais la boucle d'analyse.
 
 ## Clips vidéo
 
 Les images sont gardées en mémoire (JPEG 640 px, 5 images/s, `SAFENEST_CLIP_SECONDS`
 secondes) et encodées en MP4 H.264 au moment de l'alerte. **ffmpeg est nécessaire** pour un
 clip lisible sur iPhone et navigateur (installé par `deploy/install_service.sh`).
+
+## File d'attente sur la carte SD
+
+Chaque alerte est d'abord écrite sur la carte SD, puis envoyée : une coupure réseau, une API
+injoignable ou un redémarrage du Pi ne la font pas perdre.
+
+```
+~/.config/safenest/outbox/<clé de l'alerte>/
+  alert.json   type, heure, score, état de l'envoi
+  clip.mp4     clip encodé
+```
+
+- L'alerte part tout de suite (c'est elle qui prévient les proches) ; le clip s'encode en
+  parallèle et suit.
+- Sans réponse de l'API, l'alerte reste sur la carte SD et repart au prochain signe de vie
+  réussi, y compris après un redémarrage. Elle garde la même clé d'un essai à l'autre : l'API ne
+  crée jamais de doublon et ne prévient pas les proches deux fois.
+- La carte « Compte SafeNest » de l'interface locale affiche les alertes en attente d'envoi.
+- Une alerte enregistrée sous un appairage n'est jamais envoyée sous un autre (boîtier réassocié
+  à un autre foyer) : elle est supprimée.
+- 50 alertes au plus, gardées 14 jours (`SAFENEST_OUTBOX_MAX_DAYS`, durée de conservation des
+  clips du cahier des charges) : au-delà, les plus anciennes sont supprimées. Un clip de 3 minutes
+  pèse quelques Mo.
+- Dossiers en 700 et fichiers en 600 : lisibles par le boîtier seul.
+
+Tests (sans réseau, avec une fausse API locale ; OpenCV et ffmpeg pour le test du vrai clip) :
+
+```bash
+python -m unittest test_outbox -v
+```
 
 ## Développement sans API en ligne
 

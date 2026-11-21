@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Créer le mot de passe' if mode == 'setup' else 'Connexion' }} — SafeNest</title>
+    <style>
+        :root {
+            --dark: #233d4d;
+            --orange: #fe7f2d;
+            --bg: #1a2e38;
+            --surface: #2a4a5a;
+            --text: #f0f0f0;
+            --muted: #8eaab8;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px 16px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Inter, system-ui, -apple-system, sans-serif;
+        }
+        .card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--surface);
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 18px;
+            padding: 28px 24px;
+        }
+        .brand { display: flex; align-items: center; gap: 10px; color: #fcca46; font-weight: 700; font-size: 1.15rem; }
+        .brand svg { width: 26px; height: 26px; }
+        h1 { font-size: 1.35rem; margin: 22px 0 8px; }
+        p.help { color: var(--muted); font-size: .92rem; line-height: 1.5; margin: 0 0 20px; }
+        label { display: block; font-weight: 600; font-size: .9rem; margin: 14px 0 6px; }
+        input {
+            width: 100%;
+            padding: 13px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,.15);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 1rem;
+        }
+        input:focus { outline: 2px solid var(--orange); outline-offset: 1px; }
+        button {
+            width: 100%;
+            margin-top: 22px;
+            padding: 13px;
+            border: none;
+            border-radius: 10px;
+            background: var(--orange);
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .error {
+            margin: 16px 0 0;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(254,127,45,.15);
+            color: var(--orange);
+            font-size: .9rem;
+        }
+        .note { color: var(--muted); font-size: .8rem; margin-top: 18px; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="brand">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            SafeNest
+        </div>
+
+        {% if mode == 'setup' %}
+        <h1>Créez le mot de passe du boîtier</h1>
+        <p class="help">
+            Il protège l'image des caméras et les réglages du boîtier. Il sera demandé à chaque
+            connexion depuis un nouvel appareil.
+        </p>
+        <form method="post" action="/setup">
+            <label for="password">Mot de passe ({{ min_length }} caractères minimum)</label>
+            <input id="password" name="password" type="password" autocomplete="new-password"
+                   minlength="{{ min_length }}" required autofocus>
+            <label for="confirm">Confirmez le mot de passe</label>
+            <input id="confirm" name="confirm" type="password" autocomplete="new-password"
+                   minlength="{{ min_length }}" required>
+            {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+            <button type="submit">Enregistrer</button>
+        </form>
+        {% else %}
+        <h1>Connexion au boîtier</h1>
+        <p class="help">Saisissez le mot de passe choisi lors de l'installation du boîtier.</p>
+        <form method="post" action="/login">
+            <label for="password">Mot de passe</label>
+            <input id="password" name="password" type="password" autocomplete="current-password"
+                   required autofocus>
+            {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+            <button type="submit">Se connecter</button>
+        </form>
+        <p class="note">
+            Mot de passe oublié ? Il se réinitialise directement sur le boîtier : voir la notice
+            d'installation (CLOUD.md).
+        </p>
+        {% endif %}
+    </main>
+</body>
+</html>

@@ -13,12 +13,32 @@ L'API prévient ensuite les contacts d'urgence (SMS, email) et l'app mobile (pus
 ## Parcours d'installation
 
 1. Dans la web app SafeNest : **Boîtiers → Ajouter un boîtier** → un code à 6 caractères s'affiche.
-2. Ouvrir `http://safenest.local` (ou l'adresse IP du Pi) depuis un appareil du même réseau.
+2. Ouvrir `http://safenest.local` (ou l'adresse IP du Pi) depuis un appareil du même réseau,
+   et choisir le mot de passe du boîtier au premier accès.
 3. Carte **Compte SafeNest** : saisir le code → « Associer ».
 4. Ajouter les caméras dans la web app (fiche du boîtier) : le Pi analyse la première caméra activée.
    Sans caméra dans la web app, il utilise la source réglée localement (⚙️ ou `SAFENEST_VIDEO_URL`).
 
 Régénérer le code ou supprimer le boîtier dans la web app le dissocie : l'interface locale l'indique.
+
+## Mot de passe de l'interface locale
+
+L'interface du boîtier montre l'image des caméras : elle est protégée par un mot de passe.
+
+- **Premier accès** à `http://safenest.local` : la personne qui installe le boîtier choisit le
+  mot de passe (8 caractères minimum). Ensuite, il est demandé sur chaque nouvel appareil
+  (session de 30 jours). Bouton « Se déconnecter » dans la carte Compte SafeNest.
+- Pages, flux vidéo, API locale et temps réel sont refusés sans connexion. 5 essais au plus
+  toutes les 5 minutes. Formulaires refusés s'ils viennent d'un autre site.
+- Le mot de passe est stocké haché dans `~/.config/safenest/admin.json` (lisible par le
+  boîtier seul).
+
+**Mot de passe oublié** : sur le boîtier (SSH ou clavier), supprimer le fichier puis recharger
+la page pour en choisir un nouveau. Toutes les sessions ouvertes sont alors fermées.
+
+```bash
+rm ~/.config/safenest/admin.json
+```
 
 ## Installer le service sur le Raspberry Pi
 

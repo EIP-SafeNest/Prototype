@@ -25,11 +25,15 @@ from urllib.parse import urlparse
 
 from safenest_cloud import SafeNestCloud, CloudError
 from clip_buffer import ClipBuffer
+from local_auth import init_auth, is_logged_in
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s : %(message)s")
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Mot de passe de l'interface locale (pages, flux vidéo, API locale) : voir local_auth.py
+init_auth(app)
+# Temps réel réservé à la page du boîtier elle-même (pas d'autre site)
+socketio = SocketIO(app)
 
 # Configuration (surchargeable par variables d'environnement, cf. deploy/safenest.env.example)
 class Config:
@@ -586,6 +590,9 @@ def api_cloud_test():
 # SocketIO
 @socketio.on('connect')
 def on_connect():
+    # Le temps réel passe hors des routes Flask : on vérifie la session ici aussi
+    if not is_logged_in():
+        return False
     emit('status_update', {'status': state.status, 'running': state.running})
 
 def start_detection():
@@ -598,11 +605,13 @@ def start_detection():
 
 @socketio.on('start_detection')
 def on_start():
-    start_detection()
+    if is_logged_in():
+        start_detection()
 
 @socketio.on('stop_detection')
 def on_stop():
-    state.running = False
+    if is_logged_in():
+        state.running = False
 
 
 if __name__ == '__main__':

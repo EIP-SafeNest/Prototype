@@ -283,6 +283,17 @@
             color: var(--muted);
         }
         .cloud-pill.ok { background: rgba(161,193,129,.18); color: var(--green); }
+        .cloud-head-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+        .cloud-logout {
+            background: none;
+            border: none;
+            color: var(--muted);
+            font: inherit;
+            font-size: .8rem;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 0;
+        }
         .cloud-pill.warn { background: rgba(254,127,45,.18); color: var(--orange); }
         .cloud-pair { margin-top: 16px; }
         .cloud-pair label { font-weight: 600; font-size: .9rem; }
@@ -661,7 +672,12 @@
                     <h2>Compte SafeNest</h2>
                     <p id="cloud-summary">Chargement…</p>
                 </div>
-                <span class="cloud-pill" id="cloud-pill">…</span>
+                <div class="cloud-head-right">
+                    <span class="cloud-pill" id="cloud-pill">…</span>
+                    <form method="post" action="/logout">
+                        <button type="submit" class="cloud-logout">Se déconnecter</button>
+                    </form>
+                </div>
             </div>
 
             <form class="cloud-pair" id="cloud-pair-form" hidden>
@@ -1034,6 +1050,7 @@
             try {
                 const r = await fetch('/api/cloud');
                 if (r.status === 404) return; // version sans connexion cloud
+                if (r.status === 401) { location.href = '/login'; return; } // session expirée
                 const s = await r.json();
                 document.getElementById('cloud-card').hidden = false;
                 renderCloud(s);

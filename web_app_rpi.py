@@ -45,7 +45,7 @@ class Config:
 
 config = Config()
 
-# Délai minimal entre deux alertes du même type (évite d'envoyer 10 SMS pour le même feu)
+# Délai minimal entre deux alertes du même type (évite de prévenir 10 fois les proches pour le même feu)
 NOTIFICATION_COOLDOWN = int(os.environ.get("SAFENEST_ALERT_COOLDOWN", "120"))
 # Durée de vidéo gardée en mémoire et envoyée avec l'alerte (CdC : 3 minutes)
 CLIP_SECONDS = int(os.environ.get("SAFENEST_CLIP_SECONDS", "180"))
@@ -262,7 +262,7 @@ def detect_fire_color(frame):
 def report_incident(incident_type, confidence=None):
     """
     Signale un incident au cloud SafeNest, qui prévient les contacts d'urgence
-    (SMS, email, push) et reçoit le clip des dernières minutes.
+    (email, push) et reçoit le clip des dernières minutes.
 
     Point d'entrée pour tous les modèles de détection :
         report_incident("fire", 0.87)   # départ de feu

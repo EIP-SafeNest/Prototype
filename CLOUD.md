@@ -2,10 +2,10 @@
 
 Le Raspberry Pi (`web_app_rpi.py`) envoie ses alertes à l'API SafeNest
 (dépôt [EIP-SafeNest/SafeNest](https://github.com/EIP-SafeNest/SafeNest), contrat dans `docs/api.md`).
-L'API prévient ensuite les contacts d'urgence (SMS, email) et l'app mobile (push).
+L'API prévient ensuite les contacts d'urgence (email) et l'app mobile (push). Pas de SMS.
 
 ```
- caméra ──► Raspberry Pi ──(alerte + clip des 3 dernières minutes)──► API SafeNest ──► SMS / email / push
+ caméra ──► Raspberry Pi ──(alerte + clip des 3 dernières minutes)──► API SafeNest ──► email / push
               │  analyse locale, aucune vidéo envoyée en continu
               └─ interface locale http://safenest.local (appairage, réglages)
 ```
